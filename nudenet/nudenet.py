@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import onnxruntime
 from onnxruntime.capi import _pybind_state as C
+from PIL import Image
 
 __labels = [
     "FEMALE_GENITALIA_COVERED",
@@ -27,14 +28,17 @@ __labels = [
 ]
 
 
-def _read_image(image_path, target_size=320):
-    
-    if isinstance(image_path, str):
-        img = cv2.imread(image_path)
-    elif isinstance(image_path, np.ndarray):
-        img = image_path
+def _read_image(image, target_size=320):
+    if isinstance(image, str):
+        img = cv2.imread(image)
+    elif isinstance(image, Image.Image):
+        img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    elif isinstance(image, np.ndarray):
+        img = image
     else:
-        raise ValueError('please make sure the image_path is str or np.ndarray')
+        raise ValueError(
+            "Please make sure the image is a file path, PIL Image, or numpy array."
+        )
 
     img_height, img_width = img.shape[:2]
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -127,39 +131,46 @@ class NudeDetector:
         self.input_height = input_shape[3]  # 320
         self.input_name = model_inputs[0].name
 
-    def detect(self, image_path):
+    def detect(self, image):
         preprocessed_image, resize_factor, pad_left, pad_top = _read_image(
-            image_path, self.input_width
+            image, self.input_width
         )
         outputs = self.onnx_session.run(None, {self.input_name: preprocessed_image})
         detections = _postprocess(outputs, resize_factor, pad_left, pad_top)
 
         return detections
 
-    def censor(self, image_path, classes=[], output_path=None):
-        detections = self.detect(image_path)
+    def censor(self, image, classes=[], output_path=None):
+        detections = self.detect(image)
         if classes:
             detections = [
                 detection for detection in detections if detection["class"] in classes
             ]
 
-        img = cv2.imread(image_path)
+        if isinstance(image, str):
+            img = cv2.imread(image)
+        elif isinstance(image, Image.Image):
+            img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        elif isinstance(image, np.ndarray):
+            img = image
+        else:
+            raise ValueError(
+                "Please make sure the image is a file path, PIL Image, or numpy array."
+            )
 
         for detection in detections:
             box = detection["box"]
             x, y, w, h = box[0], box[1], box[2], box[3]
-            # change these pixels to pure black
+            # Change these pixels to pure black
             img[y : y + h, x : x + w] = (0, 0, 0)
 
         if not output_path:
-            image_path, ext = os.path.splitext(image_path)
-            output_path = f"{image_path}_censored{ext}"
+            if isinstance(image, str):
+                image_path, ext = os.path.splitext(image)
+                output_path = f"{image_path}_censored{ext}"
+            else:
+                output_path = "censored_image.png"
 
         cv2.imwrite(output_path, img)
 
         return output_path
-
-
-if __name__ == "__main__":
-    detector = NudeDetector()
-    detections = detector.detect("/Users/praneeth.bedapudi/Desktop/images.jpeg")
